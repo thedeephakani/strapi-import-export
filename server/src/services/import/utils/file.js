@@ -60,7 +60,11 @@ const findFile = async ({ hash, name, url, alternativeText, caption }, user, all
   if (!file && name) {
     //deprecated:
     // [file] = await strapi.entityService.findMany('plugin::upload.file', { filters: { name }, limit: 1 });
-    [file] = await strapi.documents('plugin::upload.file').findMany({ filters: { name }, limit: 1 });
+    [file] = await strapi.documents('plugin::upload.file').findMany({
+      filters: { name },
+      sort: { id: 'asc' },
+      limit: 1,
+    });
   }
   if (!file && url) {
     const checkResult = isValidFileUrl(url, allowedFileTypes);
@@ -217,4 +221,4 @@ const getFileDataFromRawUrl = (rawUrl) => {
   };
 };
 
-export { findOrImportFile };
+export { findOrImportFile, isExtensionAllowed };

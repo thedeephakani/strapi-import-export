@@ -10,7 +10,7 @@
   "strapi-import-export.plugin.cta.get-data": "Отримати дані",
   "strapi-import-export.plugin.cta.export": "Експорт",
   "strapi-import-export.plugin.cta.import": "Імпорт",
-  "strapi-import-export.plugin.data-format.csv": "CSV [не підтримується]",
+  "strapi-import-export.plugin.data-format.csv": "CSV",
   "strapi-import-export.plugin.data-format.json": "JSON [застаріле]",
   "strapi-import-export.plugin.data-format.json-v2": "JSON (версія 2)",
   "strapi-import-export.plugin.form.field.id-field.hint": "Виберіть поле, яке використовується як унікальний ідентифікатор",

@@ -2,7 +2,7 @@ import { isArraySafe, toArray } from '../../../libs/arrays.js';
 import { ObjectBuilder, isObjectSafe } from '../../../libs/objects.js';
 import { CustomSlugs } from '../../config/constants.js';
 import { getModelAttributes, getModel } from '../../utils/models.js';
-import { findOrImportFile } from './utils/file.js';
+import { findOrImportFile, isExtensionAllowed } from './utils/file.js';
 import { parseInputData } from './parsers.js';
 
 /**
@@ -91,8 +91,20 @@ const importOtherSlug = async (data, { slug, user, idField }) => {
  * @returns Updated/created entry.
  */
 const updateOrCreate = async (user, slug, data, idField = 'id') => {
+  const mediaRelations = [];
   const relationAttributes = getModelAttributes(slug, { filterType: ['component', 'dynamiczone', 'media', 'relation'] });
   for (let attribute of relationAttributes) {
+    if (attribute.type === 'media') {
+      if (Object.prototype.hasOwnProperty.call(data, attribute.name)) {
+        mediaRelations.push({
+          field: attribute.name,
+          fileIds: await resolveMediaIds(data[attribute.name], attribute, user),
+        });
+        delete data[attribute.name];
+      }
+      continue;
+    }
+
     data[attribute.name] = await updateOrCreateRelation(user, attribute, data[attribute.name]);
   }
 
@@ -103,46 +115,129 @@ const updateOrCreate = async (user, slug, data, idField = 'id') => {
   } else {
     entry = await updateOrCreateCollectionType(user, slug, data, idField);
   }
+
+  if (entry?.id && mediaRelations.length) {
+    await persistMediaRelations(slug, entry.id, mediaRelations);
+  }
+
   return entry;
+};
+
+const resolveMediaIds = async (value, attribute, user) => {
+  if (value == null || value === '') {
+    return [];
+  }
+
+  let values = attribute.multiple && typeof value === 'string'
+    ? value.split(';').map((item) => item.trim()).filter(Boolean)
+    : toArray(value);
+  if (!attribute.multiple) {
+    values = values.slice(0, 1);
+  }
+
+  const fileIds = [];
+
+  for (const mediaValue of values) {
+    let file;
+    const fileId = typeof mediaValue === 'number'
+      ? mediaValue
+      : isObjectSafe(mediaValue) && mediaValue.id != null
+        ? Number(mediaValue.id)
+        : typeof mediaValue === 'string' && /^\d+$/.test(mediaValue)
+          ? Number(mediaValue)
+          : null;
+
+    if (fileId != null) {
+      file = await strapi.db.query('plugin::upload.file').findOne({
+        where: { id: fileId },
+        select: ['id', 'name'],
+      });
+      if (file && !isExtensionAllowed(file.name.split('.').pop()?.toLowerCase() || '', attribute.allowedTypes ?? ['any'])) {
+        file = null;
+      }
+    } else if (typeof mediaValue === 'string' && !/^https?:\/\//i.test(mediaValue)) {
+      file = await findOrImportFile({ name: mediaValue }, user, { allowedFileTypes: attribute.allowedTypes ?? ['any'] });
+    } else {
+      file = await findOrImportFile(mediaValue, user, { allowedFileTypes: attribute.allowedTypes ?? ['any'] });
+    }
+
+    if (!file?.id) {
+      const displayValue = typeof mediaValue === 'string' ? mediaValue : JSON.stringify(mediaValue);
+      throw new Error(`Could not find an existing media file matching "${displayValue}" for field "${attribute.name}".`);
+    }
+    fileIds.push(file.id);
+  }
+
+  return fileIds;
+};
+
+const persistMediaRelations = async (relatedType, relatedId, relations) => {
+  await strapi.db.connection.transaction(async (transaction) => {
+    for (const { field, fileIds } of relations) {
+      await transaction('files_related_mph')
+        .where({ related_id: relatedId, related_type: relatedType, field })
+        .delete();
+
+      if (fileIds.length) {
+        await transaction('files_related_mph').insert(
+          fileIds.map((fileId, index) => ({
+            file_id: fileId,
+            related_id: relatedId,
+            related_type: relatedType,
+            field,
+            order: index + 1,
+          })),
+        );
+      }
+    }
+  });
 };
 
 const updateOrCreateCollectionType = async (user, slug, data, idField) => {
   const whereBuilder = new ObjectBuilder();
-  if (data[idField]) {
+  if (data[idField] != null) {
     whereBuilder.extend({ [idField]: data[idField] });
   }
   const where = whereBuilder.get();
 
-  // Prevent strapi from throwing a unique constraint error on id field.
+  const existingEntry = where[idField] ? await strapi.db.query(slug).findOne({ where }) : null;
+  console.log('existingEntry1111:::::::::::::', existingEntry, slug, data, idField);
+  // Prevent Strapi from throwing a unique constraint error on the id field.
   if (idField !== 'id') {
     delete data.id;
   }
+  console.log('existingEntry22222:::::::::::::', existingEntry, slug, data, idField);
+  if (existingEntry) {
+    const updateData = { ...data };
+    delete updateData.id;
+    delete updateData.documentId;
 
-  let entry;
-  if (!where[idField]) {
-    entry = await strapi.db.query(slug).create({ data });
-  } else {
-    entry = await strapi.db.query(slug).update({ where, data });
-
-    if (!entry) {
-      entry = await strapi.db.query(slug).create({ data });
-    }
+    return strapi.documents(slug).update({
+      documentId: existingEntry.documentId,
+      data: updateData,
+    });
   }
 
-  return entry;
+  return strapi.documents(slug).create({ data });
 };
 
 const updateOrCreateSingleType = async (user, slug, data, idField) => {
   delete data.id;
 
-  let [entry] = await strapi.db.query(slug).findMany();
-  if (!entry) {
-    entry = await strapi.db.query(slug).create({ data });
-  } else {
-    entry = await strapi.db.query(slug).update({ where: { id: entry.id }, data });
+  const [existingEntry] = await strapi.db.query(slug).findMany();
+  console.log('existingEntry3333:::::::::::::', existingEntry, slug, data, idField);
+  if (existingEntry) {
+    const updateData = { ...data };
+    delete updateData.id;
+    delete updateData.documentId;
+
+    return strapi.documents(slug).update({
+      documentId: existingEntry.documentId,
+      data: updateData,
+    });
   }
 
-  return entry;
+  return strapi.documents(slug).create({ data });
 };
 
 /**
@@ -193,17 +288,36 @@ const updateOrCreateRelation = async (user, rel, relData) => {
     }
     return rel.multiple ? entryIds : entryIds?.[0] || null;
   } else if (rel.type === 'relation') {
-    const isMultiple = isArraySafe(relData);
-    relData = toArray(relData);
+    const isMultipleRelation = rel.relation?.endsWith('ToMany');
+    const isMultiple = isArraySafe(relData) || isMultipleRelation;
+    if (isMultipleRelation && typeof relData === 'string') {
+      relData = relData.split(';').map((value) => value.trim()).filter(Boolean);
+    } else {
+      relData = toArray(relData);
+    }
+
     const entryIds = [];
     for (const relDatum of relData) {
       if (typeof relDatum === 'number') {
-        entryIds.push(relDatum);
+        const entryId = await findRelatedEntryById(rel.target, relDatum);
+        entryIds.push(entryId);
+      } else if (typeof relDatum === 'string') {
+        const entryId = await findRelatedEntryId(rel.target, relDatum);
+        entryIds.push(entryId);
       } else if (isObjectSafe(relDatum)) {
-        const entry = await updateOrCreate(user, rel.target, relDatum);
-        if (entry?.id) {
-          entryIds.push(entry.id);
+        const labelFields = Object.entries(relDatum).filter(
+          ([name, value]) => /(?:name|title|label)$/i.test(name) && isCsvScalar(value),
+        );
+        const valueFields = labelFields.length
+          ? labelFields
+          : Object.entries(relDatum).filter(([name, value]) => !systemRelationFields.has(name) && isCsvScalar(value));
+        const entryId = relDatum.id != null
+          ? await findRelatedEntryById(rel.target, relDatum.id)
+          : await findRelatedEntryId(rel.target, valueFields[0]?.[1], valueFields.map(([name]) => name));
+        if (entryId == null) {
+          throw new Error(`Could not find an existing ${rel.target} entry for the imported relation.`);
         }
+        entryIds.push(entryId);
       }
     }
     return isMultiple ? entryIds : entryIds?.[0] || null;
@@ -211,6 +325,87 @@ const updateOrCreateRelation = async (user, rel, relData) => {
 
   throw new Error(`Could not update or create relation of type ${rel.type}.`);
 };
+
+const findRelatedEntryId = async (targetSlug, value, preferredAttributeNames = []) => {
+  if (!isCsvScalar(value)) {
+    return null;
+  }
+
+  const normalizedValue = String(value).trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const model = getModel(targetSlug);
+  if (!model) {
+    throw new Error(`Could not find related content type ${targetSlug}.`);
+  }
+
+  if (/^\d+$/.test(normalizedValue)) {
+    const entryById = await findRelatedEntryById(targetSlug, Number(normalizedValue), false);
+    if (entryById) {
+      return entryById;
+    }
+  }
+
+  const textAttributeTypes = new Set(['string', 'text', 'uid', 'email', 'enumeration']);
+  const attributes = getModelAttributes(targetSlug).filter((attribute) => textAttributeTypes.has(attribute.type));
+  const preferredAttributes = preferredAttributeNames
+    .map((name) => attributes.find((attribute) => attribute.name === name))
+    .filter(Boolean);
+  const namedAttributes = attributes.filter(
+    (attribute) => /(?:name|title|label)$/i.test(attribute.name) && !preferredAttributes.includes(attribute),
+  );
+  const fallbackAttributes = attributes.filter(
+    (attribute) => !preferredAttributes.includes(attribute) && !namedAttributes.includes(attribute),
+  );
+
+  for (const attribute of [...preferredAttributes, ...namedAttributes, ...fallbackAttributes]) {
+    const matches = await strapi.db.query(targetSlug).findMany({
+      where: { [attribute.name]: normalizedValue },
+      select: ['id'],
+      orderBy: { id: 'asc' },
+      limit: 2,
+    });
+
+    if (matches.length > 1) {
+      strapi.log.warn(
+        `Multiple ${targetSlug} entries match "${normalizedValue}" in "${attribute.name}"; using the entry with id ${matches[0].id}.`,
+      );
+    }
+    if (matches.length > 0) {
+      return matches[0].id;
+    }
+  }
+
+  throw new Error(`Could not find a ${targetSlug} entry matching "${normalizedValue}".`);
+};
+
+const findRelatedEntryById = async (targetSlug, id, throwIfMissing = true) => {
+  const entry = await strapi.db.query(targetSlug).findOne({
+    where: { id },
+    select: ['id'],
+  });
+  if (entry) {
+    return entry.id;
+  }
+  if (throwIfMissing) {
+    throw new Error(`Could not find an existing ${targetSlug} entry with id "${id}".`);
+  }
+  return null;
+};
+
+const systemRelationFields = new Set([
+  'id',
+  'documentId',
+  'createdAt',
+  'updatedAt',
+  'publishedAt',
+  'locale',
+  'localizations',
+]);
+
+const isCsvScalar = (value) => ['string', 'number', 'boolean'].includes(typeof value);
 
 export {
   importData,

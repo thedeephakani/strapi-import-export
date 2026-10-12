@@ -154,7 +154,7 @@ export const ImportModal = ({ onClose }) => {
         // },
       });
 
-      const { failures } = res;
+      const { failures } = res.data;
       if (!failures.length) {
         setUploadSuccessful(ModalState.SUCCESS);
         notify(
