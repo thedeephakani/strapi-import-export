@@ -4,6 +4,30 @@ import { CustomSlugToSlug, CustomSlugs } from '../../config/constants.js';
 import { getConfig } from '../../utils/getConfig.js';
 import { getModelAttributes, getModel } from '../../utils/models.js';
 
+const systemAttributes = new Set([
+  'id',
+  'documentId',
+  'createdAt',
+  'updatedAt',
+  'publishedAt',
+  'locale',
+  'localizations',
+  'url',
+  'previewUrl',
+  'provider',
+  'provider_metadata',
+  'folderPath',
+  'hash',
+  'ext',
+  'mime',
+  'size',
+  'width',
+  'height',
+  'formats',
+  'alternativeText',
+  'caption',
+]);
+
 const convertToCsv = (entries, options) => {
   entries = toArray(entries);
   const columnTitles = ['id'].concat(getModelAttributes(options.slug, { filterOutTarget: ['admin::user'] }).map((attr) => attr.name));
@@ -20,12 +44,51 @@ const convertStrArrayToCsv = (entry) => {
 };
 
 const stringifyEntry = (entry) => {
+  if (entry == null) {
+    return '';
+  }
+
+  const richText = stringifyRichText(entry);
+  if (richText !== null) {
+    return richText;
+  }
+
+  if (Array.isArray(entry)) {
+    return entry.map(stringifyEntry).filter((value) => value !== '').join('; ');
+  }
+
   if (typeof entry === 'object') {
-    return JSON.stringify(entry);
+    const entries = Object.entries(entry).filter(([key, value]) => !systemAttributes.has(key) && isCsvScalar(value));
+    const labels = entries.filter(([key]) => /(?:name|title|label)$/i.test(key));
+    const displayEntries = labels.length ? labels : entries;
+    return displayEntries.map(([, value]) => String(value)).filter((value) => value !== '').join('; ');
   }
 
   return String(entry);
 };
+
+const stringifyRichText = (node) => {
+  if (Array.isArray(node)) {
+    const textNodes = node.map(stringifyRichText).filter((text) => text !== null);
+    return textNodes.length ? textNodes.join('\n') : null;
+  }
+
+  if (!isObjectSafe(node)) {
+    return null;
+  }
+
+  if (typeof node.text === 'string') {
+    return node.text;
+  }
+
+  if (Array.isArray(node.children)) {
+    return node.children.map(stringifyRichText).filter((text) => text !== null).join('');
+  }
+
+  return null;
+};
+
+const isCsvScalar = (value) => ['string', 'number', 'boolean'].includes(typeof value);
 
 const convertEntryToStrArray = (entry, keys) => {
   return keys.map((key) => entry[key]);

@@ -61,7 +61,7 @@ export const ExportModal = ({ availableExportFormats = [dataFormats.CSV, dataFor
           exportPluginsContentTypes: options.exportPluginsContentTypes,
         }
       });
-      setData(res.data);
+      setData(res.data.data);
     } catch (err) {
       console.log('err', err);
       handleRequestErr(err, {
@@ -155,7 +155,7 @@ export const ExportModal = ({ availableExportFormats = [dataFormats.CSV, dataFor
                         required
                         placeholder={i18n('plugin.export.export-format')}
                         value={options.exportFormat}
-                        onChange={()=>handleSetOption('exportFormat')}
+                        onChange={handleSetOption('exportFormat')}
                       >
                         {availableExportFormats.map((format) => (
                           <SingleSelectOption key={format} value={format}>

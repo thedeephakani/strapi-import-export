@@ -32,8 +32,21 @@ async function parseCsv(dataRaw, { slug }) {
   const relationNames = getModelAttributes(slug, { filterType: ['component', 'dynamiczone', 'media', 'relation'] }).map((a) => a.name);
   data = data.map((datum) => {
     for (let name of relationNames) {
+      const value = datum[name];
+      if (typeof value !== 'string') {
+        continue;
+      }
+
+      const trimmedValue = value.trim();
+      const looksLikeJson =
+        /^[\[{"]/.test(trimmedValue) ||
+        /^(?:null|true|false|-?\d+(?:\.\d+)?)$/.test(trimmedValue);
+      if (!looksLikeJson) {
+        continue;
+      }
+
       try {
-        datum[name] = JSON.parse(datum[name]);
+        datum[name] = JSON.parse(trimmedValue);
       } catch (err) {
         strapi.log.error(err);
       }
