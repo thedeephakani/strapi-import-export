@@ -1,5 +1,5 @@
 {
-  "name": "strapi-import-export",
+  "name": "@thedeephakani/strapi-import-export",
   "version": "0.0.1",
   "description": "Import export for strapi 5",
   "keywords": [],
